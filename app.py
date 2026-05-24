@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-CSV_URL = "YOUR_CONVERTED_GOOGLE_SHEET_CSV_URL"
+CSV_URL = "https://docs.google.com/spreadsheets/d/1weMRvvNVNgFDKypt-S-hl5YgbMy00dWsObGR5IgDrMw/gviz/tq?tqx=out:csv"
 
 st.set_page_config(page_title="Climbing Training Dashboard", layout="centered")
 
