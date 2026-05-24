@@ -1,5 +1,5 @@
 import re
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -11,15 +11,21 @@ st.set_page_config(page_title="Climbing Training Dashboard", layout="centered")
 
 
 def parseVGrade(gradeValue):
-    """Extract numeric V grade value from strings like 'V6'."""
+    """Extract numeric V grade value from strings like 'V6' or just '6'."""
     if pd.isna(gradeValue):
         return 0.0
     gradeText = str(gradeValue).strip().upper()
     if gradeText == "":
         return 0.0
+    
+    # try to find 'V' followed by numbers (e.g., 'V6')
     match = re.search(r"V\s*(\d+)", gradeText)
-    return float(match.group(1)) if match else 0.0
-
+    if match:
+        return float(match.group(1))
+        
+    # if not, just extract the first number found (e.g., '6')
+    match_num = re.search(r"(\d+)", gradeText)
+    return float(match_num.group(1)) if match_num else 0.0
 
 def triesMultiplier(triesValue):
     """Efficiency multiplier for sent attempts."""
@@ -36,7 +42,6 @@ def triesMultiplier(triesValue):
         return 0.8
     return 0.65
 
-
 def computeClimbCSI(gradeValue, triesValue, sentValue):
     """Compute CSI for a single climb entry."""
     gradeScore = parseVGrade(gradeValue)
@@ -44,7 +49,8 @@ def computeClimbCSI(gradeValue, triesValue, sentValue):
         return 0.0
 
     sentText = str(sentValue).strip().lower() if not pd.isna(sentValue) else ""
-    if sentText == "yes":
+
+    if sentText in ["yes", "Yes", "y", "true"]:
         return gradeScore * triesMultiplier(triesValue)
     return gradeScore * 0.25
 
@@ -53,8 +59,22 @@ def computeClimbCSI(gradeValue, triesValue, sentValue):
 def loadData():
     dataFrame = pd.read_csv(CSV_URL)
 
-    if "Timestamp" in dataFrame.columns:
-        dataFrame["Timestamp"] = pd.to_datetime(dataFrame["Timestamp"], errors="coerce")
+    column_mapping = {
+        "Protocol": "Hangboard Protocol",
+        "Max Added Weight / Force (kg)": "Hangboard Max Weight", 
+    }
+    
+    # translate names to variables
+    for i in range(1, 11):
+        column_mapping[f"Climb {i} Grade"] = f"MB_V{i}_Grade"
+        column_mapping[f"Climb {i} Tries"] = f"MB_V{i}_Tries"
+        column_mapping[f"Climb {i} Top (Y/N)"] = f"MB_V{i}_Sent"
+
+    dataFrame = dataFrame.rename(columns=column_mapping)
+
+    # standardize date formatting
+    if "Date" in dataFrame.columns:
+        dataFrame["Date"] = pd.to_datetime(dataFrame["Date"], errors="coerce")
 
     objectColumns = dataFrame.select_dtypes(include=["object"]).columns
     for columnName in objectColumns:
@@ -70,7 +90,7 @@ def computeAthleteAcwr(athleteDataFrame):
         return pd.DataFrame(columns=["Date", "Daily Workload", "Acute Workload", "Chronic Workload", "ACWR"])
 
     athleteDataFrame = athleteDataFrame.copy()
-    athleteDataFrame["Date"] = athleteDataFrame["Timestamp"].dt.date
+    athleteDataFrame["Date"] = pd.to_datetime(athleteDataFrame["Date"]).dt.date
 
     athleteDataFrame["Duration (mins)"] = pd.to_numeric(athleteDataFrame.get("Duration (mins)"), errors="coerce").fillna(0)
     athleteDataFrame["Session RPE"] = pd.to_numeric(athleteDataFrame.get("Session RPE"), errors="coerce").fillna(0)
@@ -114,7 +134,7 @@ def buildSessionCSI(boardDataFrame):
         return pd.DataFrame(columns=["Date", "Session CSI", "Peak Grade Sent", "Best Efficiency Score"])
 
     boardDataFrame = boardDataFrame.copy()
-    boardDataFrame["Date"] = boardDataFrame["Timestamp"].dt.date
+    boardDataFrame["Date"] = pd.to_datetime(boardDataFrame["Date"]).dt.date
     setIndexes = extractMoonboardSets(boardDataFrame.columns)
 
     sessionRows = []
@@ -133,7 +153,7 @@ def buildSessionCSI(boardDataFrame):
 
             gradeValue = parseVGrade(row.get(gradeColumn))
             sentText = str(row.get(sentColumn)).strip().lower() if not pd.isna(row.get(sentColumn)) else ""
-            if sentText == "yes":
+            if sentText in ["yes", "Yes", "y", "true"]:
                 peakGradeSent = max(peakGradeSent, gradeValue)
                 if gradeValue > 0:
                     bestEfficiencyScore = max(bestEfficiencyScore, climbScore / gradeValue)
@@ -169,30 +189,58 @@ def main():
         st.info("No workouts have been logged yet.")
         st.stop()
 
-    requiredColumns = ["Timestamp", "Athlete Name", "Session Type", "Duration (mins)", "Session RPE"]
+    requiredColumns = ["Date", "Athlete Name", "Session Type", "Duration (mins)", "Session RPE"]
     missingColumns = [col for col in requiredColumns if col not in dataFrame.columns]
     if missingColumns:
         st.error(f"Missing required columns: {', '.join(missingColumns)}")
         st.stop()
 
-    dataFrame = dataFrame.dropna(subset=["Timestamp"]).copy()
+    dataFrame = dataFrame.dropna(subset=["Date"]).copy()
     if dataFrame.empty:
-        st.info("No valid workout timestamps are available yet.")
+        st.info("No valid workout dates are available yet.")
         st.stop()
 
-    dataFrame["Date"] = dataFrame["Timestamp"].dt.date
+    dataFrame["Date"] = pd.to_datetime(dataFrame["Date"]).dt.date
 
     athleteOptions = sorted([name for name in dataFrame["Athlete Name"].dropna().unique() if str(name).strip() != ""])
     selectedAthletes = st.multiselect("Athlete Name", athleteOptions, default=athleteOptions)
 
     minDate = dataFrame["Date"].min()
     maxDate = dataFrame["Date"].max()
-    selectedDateRange = st.date_input("Date Range", value=(minDate, maxDate), min_value=minDate, max_value=maxDate)
 
-    if isinstance(selectedDateRange, tuple) and len(selectedDateRange) == 2:
-        startDate, endDate = selectedDateRange
+    preset_options = ["1 Week", "2 Weeks", "1 Month (4 Weeks)", "1 Year", "All Time", "Custom"]
+    
+    # default to 1 month
+    selected_preset = st.selectbox("Timeframe", preset_options, index=2) 
+
+    if selected_preset == "1 Week":
+        startDate = maxDate - timedelta(days=7)
+        endDate = maxDate
+    elif selected_preset == "2 Weeks":
+        startDate = maxDate - timedelta(days=14)
+        endDate = maxDate
+    elif selected_preset == "1 Month (4 Weeks)":
+        startDate = maxDate - timedelta(days=28)
+        endDate = maxDate
+    elif selected_preset == "1 Year":
+        startDate = maxDate - timedelta(days=365)
+        endDate = maxDate
+    elif selected_preset == "All Time":
+        startDate = minDate
+        endDate = maxDate
     else:
-        startDate, endDate = minDate, maxDate
+        selectedDateRange = st.date_input(
+            "Custom Date Range", 
+            value=(minDate, maxDate), 
+            min_value=minDate, 
+            max_value=maxDate
+        )
+        if isinstance(selectedDateRange, tuple) and len(selectedDateRange) == 2:
+            startDate, endDate = selectedDateRange
+        else:
+            startDate, endDate = minDate, maxDate
+
+    startDate = max(startDate, minDate)
 
     filteredData = dataFrame.copy()
     if selectedAthletes:
@@ -257,11 +305,11 @@ def main():
                 fingerFigure = go.Figure()
                 for protocolName in sorted(fingerData[protocolColumn].fillna("Unknown").unique()):
                     protocolSlice = fingerData[fingerData[protocolColumn].fillna("Unknown") == protocolName]
-                    protocolSlice = protocolSlice.sort_values("Timestamp")
+                    protocolSlice = protocolSlice.sort_values("Date")
 
                     fingerFigure.add_trace(
                         go.Scatter(
-                            x=protocolSlice["Timestamp"],
+                            x=protocolSlice["Date"],
                             y=protocolSlice["Hangboard Max Weight"],
                             mode="lines+markers",
                             name=str(protocolName),
@@ -277,55 +325,55 @@ def main():
                 st.plotly_chart(fingerFigure, use_container_width=True)
 
     with tabs[2]:
-        st.subheader("Moonboard Performance & Strength Index")
+        st.subheader("Board Climbing Performance & Strength Index")
         boardData = filteredData[
-            filteredData["Session Type"].astype(str).str.strip().eq("Board Climbing (Moonboard)")
+            filteredData["Session Type"].astype(str).str.strip().eq("Board Climbing")
         ].copy()
 
         if boardData.empty:
-            st.info("No Moonboard sessions available for the selected filters.")
+            st.info("No board sessions available for the selected filters.")
         else:
             csiData = buildSessionCSI(boardData)
             if csiData.empty:
-                st.info("No valid Moonboard climb entries were found.")
+                st.info("No valid board climb entries were found.")
             else:
                 csiData = csiData.sort_values("Date")
 
-                csiFigure = go.Figure()
-                csiFigure.add_trace(
-                    go.Scatter(
-                        x=csiData["Date"],
-                        y=csiData["Session CSI"],
-                        mode="lines+markers",
-                        name="Session CSI",
-                    )
+            csiFigure = go.Figure()
+            csiFigure.add_trace(
+                go.Scatter(
+                    x=csiData["Date"],
+                    y=csiData["Session CSI"],
+                    mode="lines+markers",
+                    name="Session CSI",
                 )
-                csiFigure.add_trace(
-                    go.Scatter(
-                        x=csiData["Date"],
-                        y=csiData["Rolling 14-Day CSI"],
-                        mode="lines",
-                        name="14-Day Trend",
-                    )
+            )
+            csiFigure.add_trace(
+                go.Scatter(
+                    x=csiData["Date"],
+                    y=csiData["Rolling 14-Day CSI"],
+                    mode="lines",
+                    name="14-Day Trend",
                 )
-                csiFigure.update_layout(
-                    title="Session CSI Over Time",
-                    xaxis_title="Date",
-                    yaxis_title="CSI",
-                    margin=dict(l=20, r=20, t=50, b=20),
-                )
-                st.plotly_chart(csiFigure, use_container_width=True)
+            )
+            csiFigure.update_layout(
+                title="Session CSI Over Time",
+                xaxis_title="Date",
+                yaxis_title="CSI",
+                margin=dict(l=20, r=20, t=50, b=20),
+            )
+            st.plotly_chart(csiFigure, use_container_width=True)
 
-                peakGradeSent = csiData["Peak Grade Sent"].max()
-                maxEfficiency = csiData["Best Efficiency Score"].max()
+            peakGradeSent = csiData["Peak Grade Sent"].max()
+            maxEfficiency = csiData["Best Efficiency Score"].max()
 
-                summaryData = pd.DataFrame(
-                    {
-                        "Metric": ["Highest Grade Sent", "Max Efficiency Score"],
-                        "Value": [f"V{int(peakGradeSent)}" if peakGradeSent > 0 else "N/A", round(maxEfficiency, 2)],
-                    }
-                )
-                st.dataframe(summaryData, use_container_width=True, hide_index=True)
+            summaryData = pd.DataFrame(
+                {
+                    "Metric": ["Highest Grade Sent", "Max Efficiency Score"],
+                    "Value": [f"V{int(peakGradeSent)}" if peakGradeSent > 0 else "N/A", round(maxEfficiency, 2)],
+                }
+            )
+            st.dataframe(summaryData, use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":
