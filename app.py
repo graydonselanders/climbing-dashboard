@@ -79,7 +79,7 @@ def computeClimbCSI(gradeValue, triesValue, sentValue):
 def resolveSessionLabel(row):
     """Return Sub-Category Focus for General Session input rows, else Session Type."""
     session_type = str(row.get("Session Type", "")).strip()
-    if session_type == "General Session input":
+    if session_type == "General Session input" or "Bouldering / Skill Work (e.g. comp sim, slab training)":
         sub_cat = str(row.get("Sub-Category Focus", "")).strip()
         if sub_cat:
             return sub_cat
@@ -362,6 +362,7 @@ def main():
         st.subheader("Rest-Day Aware ACWR")
 
         acwrFigure = go.Figure()
+        acwrSummaries = []
         for athleteName in sorted(filteredData["Athlete Name"].dropna().unique()):
             athleteSlice = filteredData[filteredData["Athlete Name"] == athleteName]
             acwrData = computeAthleteAcwr(athleteSlice)
@@ -373,6 +374,31 @@ def main():
                     mode="lines",
                     name=str(athleteName),
                 )
+            )
+
+            latestAcwr = acwrData["ACWR"].dropna()
+            acwrSummaries.append((athleteName, latestAcwr.iloc[-1] if not latestAcwr.empty else None))
+
+        for athleteName, currentAcwr in acwrSummaries:
+            if currentAcwr is None:
+                continue
+            if currentAcwr < 0.8:
+                color = "#b8860b"
+                verdict = "Undertrained — consider adding load today"
+            elif currentAcwr <= 1.3:
+                color = "#2e7d32"
+                verdict = "Optimal zone — good to train today"
+            else:
+                color = "#c62828"
+                verdict = "High load — rest or easy session today"
+
+            prefix = f"<b>{athleteName}:</b> " if len(acwrSummaries) > 1 else ""
+            st.markdown(
+                f"<div style='text-align:center;margin-bottom:0.25rem'>"
+                f"<span style='font-size:1.4rem;font-weight:600;color:{color}'>"
+                f"{prefix}ACWR {currentAcwr:.2f} — {verdict}"
+                f"</span></div>",
+                unsafe_allow_html=True,
             )
 
         acwrFigure.add_hrect(y0=0, y1=0.79, fillcolor="yellow", opacity=0.12, line_width=0)
@@ -387,14 +413,19 @@ def main():
             st.caption("Planned workouts will appear here once scheduling data is connected.")
 
         st.subheader("Recent Sessions")
+        recentSessions = selectedAthleteData.sort_values("Date", ascending=False).head(5).copy()
+        recentSessions["Duration (mins)"] = pd.to_numeric(recentSessions["Duration (mins)"], errors="coerce")
+        recentSessions["Session RPE"] = pd.to_numeric(recentSessions["Session RPE"], errors="coerce")
+        recentSessions["Workload (AU)"] = (
+            recentSessions["Duration (mins)"] * recentSessions["Session RPE"]
+        ).round(0).astype("Int64")
         recentColumns = [
             columnName
-            for columnName in ["Date", "Athlete Name", "Session Label", "Duration (mins)", "Session RPE"]
-            if columnName in filteredData.columns
+            for columnName in ["Date", "Athlete Name", "Session Label", "Duration (mins)", "Session RPE", "Workload (AU)"]
+            if columnName in recentSessions.columns
         ]
         recentSessions = (
-            selectedAthleteData.sort_values("Date", ascending=False)
-            .head(5)[recentColumns]
+            recentSessions[recentColumns]
             .rename(columns={"Session Label": "Session Type"})
         )
         st.dataframe(recentSessions, use_container_width=True, hide_index=True)
