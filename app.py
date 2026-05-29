@@ -76,15 +76,25 @@ def computeClimbCSI(gradeValue, triesValue, sentValue):
     return gradeScore * 0.25
 
 
+def resolveSessionLabel(row):
+    """Return Sub-Category Focus for General Session input rows, else Session Type."""
+    session_type = str(row.get("Session Type", "")).strip()
+    if session_type == "General Session input":
+        sub_cat = str(row.get("Sub-Category Focus", "")).strip()
+        if sub_cat:
+            return sub_cat
+    return session_type
+
+
 @st.cache_data(ttl=300)
 def loadData():
     dataFrame = pd.read_csv(CSV_URL)
 
     column_mapping = {
         "Protocol": "Hangboard Protocol",
-        "Max Added Weight / Force (kg)": "Hangboard Max Weight", 
+        "Max Added Weight / Force (lbs)": "Hangboard Max Weight",
     }
-    
+
     # translate names to variables
     for i in range(1, 11):
         column_mapping[f"Climb {i} Grade"] = f"MB_V{i}_Grade"
@@ -101,6 +111,8 @@ def loadData():
     for columnName in objectColumns:
         dataFrame[columnName] = dataFrame[columnName].astype(str).str.rstrip()
         dataFrame[columnName] = dataFrame[columnName].replace("nan", "")
+
+    dataFrame["Session Label"] = dataFrame.apply(resolveSessionLabel, axis=1)
 
     return dataFrame
 
@@ -363,8 +375,9 @@ def main():
                 )
             )
 
+        acwrFigure.add_hrect(y0=0, y1=0.79, fillcolor="yellow", opacity=0.12, line_width=0)
         acwrFigure.add_hrect(y0=0.8, y1=1.3, fillcolor="green", opacity=0.12, line_width=0)
-        acwrFigure.add_hrect(y0=1.5, y1=5, fillcolor="red", opacity=0.12, line_width=0)
+        acwrFigure.add_hrect(y0=1.31, y1=3, fillcolor="red", opacity=0.12, line_width=0)
         applyMobileChartLayout(acwrFigure, "Acute:Chronic Workload Ratio", "ACWR")
         st.plotly_chart(acwrFigure, use_container_width=True)
 
@@ -376,10 +389,14 @@ def main():
         st.subheader("Recent Sessions")
         recentColumns = [
             columnName
-            for columnName in ["Date", "Athlete Name", "Session Type", "Duration (mins)", "Session RPE"]
+            for columnName in ["Date", "Athlete Name", "Session Label", "Duration (mins)", "Session RPE"]
             if columnName in filteredData.columns
         ]
-        recentSessions = selectedAthleteData.sort_values("Date", ascending=False).head(5)[recentColumns]
+        recentSessions = (
+            selectedAthleteData.sort_values("Date", ascending=False)
+            .head(5)[recentColumns]
+            .rename(columns={"Session Label": "Session Type"})
+        )
         st.dataframe(recentSessions, use_container_width=True, hide_index=True)
 
     with tabs[1]:
@@ -405,14 +422,14 @@ def main():
                         customdata=gripSlice[["Hangboard Protocol", "Bodyweight"]],
                         hovertemplate=(
                             "Date: %{x}<br>"
-                            "Total Load: %{y:.1f} kg<br>"
+                            "Total Load: %{y:.1f} lbs<br>"
                             "Protocol: %{customdata[0]}<br>"
-                            "Bodyweight: %{customdata[1]:.1f} kg<extra></extra>"
+                            "Bodyweight: %{customdata[1]:.1f} lbs<extra></extra>"
                         ),
                     )
                 )
 
-            applyMobileChartLayout(fingerFigure, "Hangboard Total Load by Grip Type", "Total Load (kg)")
+            applyMobileChartLayout(fingerFigure, "Hangboard Total Load by Grip Type", "Total Load (lbs)")
             st.plotly_chart(fingerFigure, use_container_width=True)
 
         st.markdown("#### Pull-up 1RM Progression")
@@ -432,14 +449,14 @@ def main():
                         customdata=athletePullups[["Bodyweight", "Pull-up 1RM Added Weight"]],
                         hovertemplate=(
                             "Date: %{x}<br>"
-                            "Total 1RM: %{y:.1f} kg<br>"
-                            "Bodyweight: %{customdata[0]:.1f} kg<br>"
-                            "Added: %{customdata[1]:.1f} kg<extra></extra>"
+                            "Total 1RM: %{y:.1f} lbs<br>"
+                            "Bodyweight: %{customdata[0]:.1f} lbs<br>"
+                            "Added: %{customdata[1]:.1f} lbs<extra></extra>"
                         ),
                     )
                 )
 
-            applyMobileChartLayout(pullupFigure, "Pull-up Total 1RM Over Time", "Total 1RM (kg)")
+            applyMobileChartLayout(pullupFigure, "Pull-up Total 1RM Over Time", "Total 1RM (lbs)")
             st.plotly_chart(pullupFigure, use_container_width=True)
 
         st.markdown("#### National Benchmark Comparison")
