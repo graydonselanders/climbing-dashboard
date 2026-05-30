@@ -2,7 +2,7 @@
 
 I wanted a personal sports-science dashboard for tracking and visualising my training over time, so here it is.
 
-**[Open Dashboard](hhttps://climbing-dashboard.streamlit.app/)** &nbsp;|&nbsp; **[Log a Session](https://docs.google.com/forms/d/e/1FAIpQLScLSuWsQKgwPPPCpGRrLRI_Vn3U32Cev2sRsdWfdPyaAi2lpA/viewform?usp=dialog)**
+**[Open Dashboard](https://climbing-dashboard.streamlit.app/)** &nbsp;|&nbsp; **[Log a Session](https://docs.google.com/forms/d/e/1FAIpQLScLSuWsQKgwPPPCpGRrLRI_Vn3U32Cev2sRsdWfdPyaAi2lpA/viewform?usp=dialog)**
 
 ---
 
