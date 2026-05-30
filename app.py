@@ -89,10 +89,14 @@ def resolveSessionLabel(row):
 @st.cache_data(ttl=300)
 def loadData():
     dataFrame = pd.read_csv(CSV_URL)
+    dataFrame.columns = dataFrame.columns.str.strip()
 
     column_mapping = {
         "Protocol": "Hangboard Protocol",
         "Max Added Weight / Force (lbs)": "Hangboard Max Weight",
+        "Bodyweight (lbs)": "Bodyweight",
+        "Pull up 1RM added weight (lbs)": "Pull-up 1RM Added Weight",
+        "Grip type": "Grip Type",
     }
 
     # translate names to variables
@@ -176,7 +180,7 @@ def prepareFingerStrengthData(sourceDataFrame):
         return pd.DataFrame(columns=["Date", "Bodyweight", "Hangboard Protocol", "Grip Type", "Hangboard Total Load"])
 
     fingerData["Bodyweight"] = pd.to_numeric(fingerData["Bodyweight"], errors="coerce")
-    fingerData["Hangboard Max Weight"] = pd.to_numeric(fingerData["Hangboard Max Weight"], errors="coerce")
+    fingerData["Hangboard Max Weight"] = pd.to_numeric(fingerData["Hangboard Max Weight"], errors="coerce").fillna(0)
     fingerData["Hangboard Protocol"] = fingerData["Hangboard Protocol"].fillna("Unknown").replace("", "Unknown")
     fingerData["Grip Type"] = fingerData["Grip Type"].fillna("Unknown").replace("", "Unknown")
 
@@ -210,13 +214,13 @@ def buildBenchmarkData(sourceDataFrame):
         allTimeFingerData["Grip Type"].astype(str).str.strip().str.lower().eq("half crimp")
     ].copy()
     if not halfCrimpData.empty:
-        halfCrimpData["Relative Strength"] = halfCrimpData["Hangboard Total Load"] / halfCrimpData["Bodyweight"]
+        halfCrimpData["Relative Strength"] = halfCrimpData["Hangboard Max Weight"] / halfCrimpData["Bodyweight"]
         bestHalfCrimp = halfCrimpData.loc[halfCrimpData["Relative Strength"].idxmax()]
         benchmarkRows.append(
             {
                 "Metric": "20mm Half Crimp",
                 "Current % Bodyweight": bestHalfCrimp["Relative Strength"] * 100,
-                "National Target % Bodyweight": 140,
+                "National Target % Bodyweight": 150,
             }
         )
 
@@ -227,7 +231,7 @@ def buildBenchmarkData(sourceDataFrame):
             {
                 "Metric": "Pull-up 1RM",
                 "Current % Bodyweight": bestPullup["Relative Strength"] * 100,
-                "National Target % Bodyweight": 155,
+                "National Target % Bodyweight": 165,
             }
         )
 
@@ -286,6 +290,7 @@ def buildSessionCSI(boardDataFrame):
 
 def main():
     st.title("Climbing Sports Science Dashboard")
+    st.caption("📋 Log a session: [Open Training Form](https://docs.google.com/forms/d/e/1FAIpQLScLSuWsQKgwPPPCpGRrLRI_Vn3U32Cev2sRsdWfdPyaAi2lpA/viewform?usp=dialog)")
 
     dataFrame = loadData()
 
@@ -441,26 +446,29 @@ def main():
             st.info("No hangboard data available for the selected filters.")
         else:
             fingerFigure = go.Figure()
-            for gripType in sorted(fingerData["Grip Type"].fillna("Unknown").unique()):
-                gripSlice = fingerData[fingerData["Grip Type"].fillna("Unknown") == gripType].sort_values("Date")
-
+            fingerData["Grip Type"] = fingerData["Grip Type"].fillna("Unknown")
+            fingerData["Hangboard Protocol"] = fingerData["Hangboard Protocol"].fillna("Unknown")
+            groups = (
+                fingerData.groupby(["Grip Type", "Hangboard Protocol"], sort=True)
+            )
+            for (gripType, protocol), slice_ in groups:
+                slice_ = slice_.sort_values("Date")
                 fingerFigure.add_trace(
                     go.Scatter(
-                        x=gripSlice["Date"],
-                        y=gripSlice["Hangboard Total Load"],
+                        x=slice_["Date"],
+                        y=slice_["Hangboard Total Load"],
                         mode="lines+markers",
-                        name=str(gripType),
-                        customdata=gripSlice[["Hangboard Protocol", "Bodyweight"]],
+                        name=f"{gripType} — {protocol}",
+                        customdata=slice_[["Bodyweight"]],
                         hovertemplate=(
                             "Date: %{x}<br>"
                             "Total Load: %{y:.1f} lbs<br>"
-                            "Protocol: %{customdata[0]}<br>"
-                            "Bodyweight: %{customdata[1]:.1f} lbs<extra></extra>"
+                            "Bodyweight: %{customdata[0]:.1f} lbs<extra></extra>"
                         ),
                     )
                 )
 
-            applyMobileChartLayout(fingerFigure, "Hangboard Total Load by Grip Type", "Total Load (lbs)")
+            applyMobileChartLayout(fingerFigure, "Hangboard Total Load by Grip Type & Protocol", "Total Load (lbs)")
             st.plotly_chart(fingerFigure, use_container_width=True)
 
         st.markdown("#### Pull-up 1RM Progression")
@@ -502,7 +510,7 @@ def main():
                     x=benchmarkData["National Target % Bodyweight"],
                     orientation="h",
                     name="Canadian National V10-V11 Target",
-                    marker_color="rgba(80, 80, 80, 0.25)",
+                    marker_color="rgba(80, 80, 80, 0.4)",
                     hovertemplate="Target: %{x:.0f}% bodyweight<extra></extra>",
                 )
             )
