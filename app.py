@@ -1,9 +1,12 @@
 import re
-from datetime import date, timedelta
+import urllib.request
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from icalendar import Calendar
+import recurring_ical_events
 
 CSV_URL = "https://docs.google.com/spreadsheets/d/1weMRvvNVNgFDKypt-S-hl5YgbMy00dWsObGR5IgDrMw/gviz/tq?tqx=out:csv"
 
@@ -288,6 +291,45 @@ def buildSessionCSI(boardDataFrame):
     return sessionDataFrame
 
 
+@st.cache_data(ttl=900)
+def loadUpcomingSessions(icalUrl, lookAheadDays=4):
+    """Fetch upcoming Session A–D events from a Google Calendar ICS feed."""
+    try:
+        with urllib.request.urlopen(icalUrl, timeout=10) as response:
+            icalData = response.read()
+
+        cal = Calendar.from_ical(icalData)
+        today = date.today()
+        cutoff = today + timedelta(days=lookAheadDays)
+
+        events = recurring_ical_events.of(cal).between(
+            datetime(today.year, today.month, today.day, tzinfo=timezone.utc),
+            datetime(cutoff.year, cutoff.month, cutoff.day, 23, 59, 59, tzinfo=timezone.utc),
+        )
+
+        rows = []
+        for event in events:
+            summary = str(event.get("SUMMARY", ""))
+            if not re.match(r"^Session\s+[A-Da-d]\b", summary):
+                continue
+            dtstart = event.get("DTSTART").dt
+            eventDate = dtstart.date() if hasattr(dtstart, "date") else dtstart
+            if eventDate < today:
+                continue
+            description = str(event.get("DESCRIPTION", "")).strip()
+            rows.append({
+                "Date": eventDate,
+                "Session": summary,
+                "Notes": description if description else "",
+            })
+
+        rows.sort(key=lambda r: r["Date"])
+        return rows, None
+
+    except Exception as exc:
+        return [], str(exc)
+
+
 def main():
     st.title("Climbing Sports Science Dashboard")
     st.caption("📋 Log a session: [Open Training Form](https://docs.google.com/forms/d/e/1FAIpQLScLSuWsQKgwPPPCpGRrLRI_Vn3U32Cev2sRsdWfdPyaAi2lpA/viewform?usp=dialog)")
@@ -415,7 +457,27 @@ def main():
         upcomingContainer = st.container(border=True)
         with upcomingContainer:
             st.markdown("### Upcoming Sessions")
-            st.caption("Planned workouts will appear here once scheduling data is connected.")
+            icalUrl = st.secrets.get("GCAL_ICAL_URL", "")
+            if not icalUrl:
+                st.caption("Add your Google Calendar iCal URL to `.streamlit/secrets.toml` to see upcoming sessions.")
+            else:
+                upcomingSessions, fetchError = loadUpcomingSessions(icalUrl)
+                if fetchError:
+                    st.warning(f"Could not load calendar: {fetchError}")
+                elif not upcomingSessions:
+                    st.caption("No Session A–D events found in the next 14 days.")
+                else:
+                    for session in upcomingSessions:
+                        sessionDate = session["Date"]
+                        daysAway = (sessionDate - date.today()).days
+                        dayLabel = "Today" if daysAway == 0 else f"in {daysAway} day{'s' if daysAway != 1 else ''}"
+                        notesText = f" · {session['Notes']}" if session["Notes"] else ""
+                        dayNum = sessionDate.strftime("%d").lstrip("0") or "0"
+                        st.markdown(
+                            f"**{session['Session']}** &nbsp; "
+                            f"<span style='color:grey'>{sessionDate.strftime('%a %b')} {dayNum} ({dayLabel}){notesText}</span>",
+                            unsafe_allow_html=True,
+                        )
 
         st.subheader("Recent Sessions")
         recentSessions = selectedAthleteData.sort_values("Date", ascending=False).head(5).copy()
