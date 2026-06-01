@@ -20,6 +20,20 @@ INSIDE_LEGEND = dict(
     bgcolor="rgba(255,255,255,0.7)",
 )
 
+# Render charts as static images: no pan/zoom/hover, no accidental
+# pinch-zoom on mobile, and responsive sizing to the container width.
+STATIC_CHART_CONFIG = {
+    "staticPlot": True,
+    "displayModeBar": False,
+    "responsive": True,
+}
+
+
+def renderChart(figure):
+    """Display a Plotly figure as a non-interactive, full-width chart."""
+    figure.update_layout(autosize=True)
+    st.plotly_chart(figure, use_container_width=True, config=STATIC_CHART_CONFIG)
+
 
 def applyMobileChartLayout(figure, title, yAxisTitle, **layoutOptions):
     """Apply compact, mobile-first Plotly defaults."""
@@ -354,7 +368,10 @@ def main():
     dataFrame["Date"] = pd.to_datetime(dataFrame["Date"]).dt.date
 
     athleteOptions = sorted([name for name in dataFrame["Athlete Name"].dropna().unique() if str(name).strip() != ""])
-    selectedAthletes = st.multiselect("Athlete Name", athleteOptions, default=athleteOptions)
+    if not athleteOptions:
+        st.info("No athletes have logged any sessions yet.")
+        st.stop()
+    selectedAthlete = st.selectbox("Athlete Name", athleteOptions)
 
     minDate = dataFrame["Date"].min()
     maxDate = dataFrame["Date"].max()
@@ -393,9 +410,7 @@ def main():
 
     startDate = max(startDate, minDate)
 
-    selectedAthleteData = dataFrame.copy()
-    if selectedAthletes:
-        selectedAthleteData = selectedAthleteData[selectedAthleteData["Athlete Name"].isin(selectedAthletes)]
+    selectedAthleteData = dataFrame[dataFrame["Athlete Name"] == selectedAthlete].copy()
 
     filteredData = selectedAthleteData[(selectedAthleteData["Date"] >= startDate) & (selectedAthleteData["Date"] <= endDate)]
 
@@ -408,27 +423,11 @@ def main():
     with tabs[0]:
         st.subheader("Rest-Day Aware ACWR")
 
-        acwrFigure = go.Figure()
-        acwrSummaries = []
-        for athleteName in sorted(filteredData["Athlete Name"].dropna().unique()):
-            athleteSlice = filteredData[filteredData["Athlete Name"] == athleteName]
-            acwrData = computeAthleteAcwr(athleteSlice)
+        acwrData = computeAthleteAcwr(filteredData)
 
-            acwrFigure.add_trace(
-                go.Scatter(
-                    x=acwrData["Date"],
-                    y=acwrData["ACWR"],
-                    mode="lines",
-                    name=str(athleteName),
-                )
-            )
-
-            latestAcwr = acwrData["ACWR"].dropna()
-            acwrSummaries.append((athleteName, latestAcwr.iloc[-1] if not latestAcwr.empty else None))
-
-        for athleteName, currentAcwr in acwrSummaries:
-            if currentAcwr is None:
-                continue
+        latestAcwr = acwrData["ACWR"].dropna()
+        currentAcwr = latestAcwr.iloc[-1] if not latestAcwr.empty else None
+        if currentAcwr is not None:
             if currentAcwr < 0.8:
                 color = "#b8860b"
                 verdict = "Undertrained — consider adding load today"
@@ -439,33 +438,41 @@ def main():
                 color = "#c62828"
                 verdict = "High load — rest or easy session today"
 
-            prefix = f"<b>{athleteName}:</b> " if len(acwrSummaries) > 1 else ""
             st.markdown(
                 f"<div style='text-align:center;margin-bottom:0.25rem'>"
                 f"<span style='font-size:1.4rem;font-weight:600;color:{color}'>"
-                f"{prefix}ACWR {currentAcwr:.2f} — {verdict}"
+                f"ACWR {currentAcwr:.2f} — {verdict}"
                 f"</span></div>",
                 unsafe_allow_html=True,
             )
 
+        acwrFigure = go.Figure()
+        acwrFigure.add_trace(
+            go.Scatter(
+                x=acwrData["Date"],
+                y=acwrData["ACWR"],
+                mode="lines",
+                name=str(selectedAthlete),
+            )
+        )
         acwrFigure.add_hrect(y0=0, y1=0.79, fillcolor="yellow", opacity=0.12, line_width=0)
         acwrFigure.add_hrect(y0=0.8, y1=1.3, fillcolor="green", opacity=0.12, line_width=0)
         acwrFigure.add_hrect(y0=1.31, y1=3, fillcolor="red", opacity=0.12, line_width=0)
         applyMobileChartLayout(acwrFigure, "Acute:Chronic Workload Ratio", "ACWR")
-        st.plotly_chart(acwrFigure, use_container_width=True)
+        renderChart(acwrFigure)
 
-        upcomingContainer = st.container(border=True)
-        with upcomingContainer:
-            st.markdown("### Upcoming Sessions")
-            icalUrl = st.secrets.get("GCAL_ICAL_URL", "")
-            if not icalUrl:
-                st.caption("Add your Google Calendar iCal URL to `.streamlit/secrets.toml` to see upcoming sessions.")
-            else:
+        # Per-athlete calendar: only shown if this athlete has shared an iCal link.
+        calendarLinks = st.secrets.get("calendars", {})
+        icalUrl = calendarLinks.get(selectedAthlete, "")
+        if icalUrl:
+            upcomingContainer = st.container(border=True)
+            with upcomingContainer:
+                st.markdown("### Upcoming Sessions")
                 upcomingSessions, fetchError = loadUpcomingSessions(icalUrl)
                 if fetchError:
                     st.warning(f"Could not load calendar: {fetchError}")
                 elif not upcomingSessions:
-                    st.caption("No Session A–D events found in the next 14 days.")
+                    st.caption("No upcoming Session A–D events found.")
                 else:
                     for session in upcomingSessions:
                         sessionDate = session["Date"]
@@ -488,7 +495,7 @@ def main():
         ).round(0).astype("Int64")
         recentColumns = [
             columnName
-            for columnName in ["Date", "Athlete Name", "Session Label", "Duration (mins)", "Session RPE", "Workload (AU)"]
+            for columnName in ["Date", "Session Label", "Duration (mins)", "Session RPE", "Workload (AU)"]
             if columnName in recentSessions.columns
         ]
         recentSessions = (
@@ -531,7 +538,7 @@ def main():
                 )
 
             applyMobileChartLayout(fingerFigure, "Hangboard Total Load by Grip Type & Protocol", "Total Load (lbs)")
-            st.plotly_chart(fingerFigure, use_container_width=True)
+            renderChart(fingerFigure)
 
         st.markdown("#### Pull-up 1RM Progression")
         pullupData = preparePullupData(filteredData)
@@ -558,7 +565,7 @@ def main():
                 )
 
             applyMobileChartLayout(pullupFigure, "Pull-up Total 1RM Over Time", "Total 1RM (lbs)")
-            st.plotly_chart(pullupFigure, use_container_width=True)
+            renderChart(pullupFigure)
 
         st.markdown("#### National Benchmark Comparison")
         benchmarkData = buildBenchmarkData(selectedAthleteData)
@@ -595,7 +602,7 @@ def main():
                 barmode="overlay",
             )
             benchmarkFigure.update_xaxes(range=[0, max(170, benchmarkData["National Target % Bodyweight"].max() + 10)])
-            st.plotly_chart(benchmarkFigure, use_container_width=True)
+            renderChart(benchmarkFigure)
 
         st.markdown("#### Board Climbing Performance & Strength Index")
         boardData = filteredData[
@@ -629,7 +636,7 @@ def main():
                     )
                 )
                 applyMobileChartLayout(csiFigure, "Session CSI Over Time", "CSI")
-                st.plotly_chart(csiFigure, use_container_width=True)
+                renderChart(csiFigure)
 
                 peakGradeSent = csiData["Peak Grade Sent"].max()
                 maxEfficiency = csiData["Best Efficiency Score"].max()
